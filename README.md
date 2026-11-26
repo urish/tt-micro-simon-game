@@ -1,6 +1,8 @@
 ![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg)
 
-# Simon Says Game for Tiny Tapeout
+# Simon Says Game for Tiny Tapeout - micro tile edition
+
+A port of [urish/tt-simon-game](https://github.com/urish/tt-simon-game) (commit ced4034) to a sky130A micro tile.
 
 - [Read the documentation for project](docs/info.md)
 
@@ -20,9 +22,12 @@ by pressing the buttons according to the color sequence.
 If the user repeated the sequence correctly, the game will play a "leveling-up" sound,
 add a new color at the end of the sequence, and move to the next turn.
 
-The game continues until the user has made a mistake. Then a game over sound is played, and the game restarts.
+The game continues until the user has made a mistake. Then a game over sound is played, and the next button
+press starts a new game. In this micro tile version a wrong press ends the game at once, several buttons at once count
+as a wrong press, and the LEDs return to the power-on chase after the buzz.
 
 ## Online simulation
 
-You can play the game using the online Wokwi simulation at https://wokwi.com/projects/408757730664700929. 
+You can play the 1x1 version of the game (with the score display) using the online Wokwi simulation at
+https://wokwi.com/projects/408757730664700929.
 The simulation also shows the wiring diagram.

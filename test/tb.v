@@ -3,6 +3,7 @@
 
 /* This testbench just instantiates the module and makes some convenient wires
    that can be driven / tested by the cocotb test.py.
+   A micro tile has only clk, rst_n, ui_in and uo_out.
 */
 module tb ();
 
@@ -17,17 +18,12 @@ module tb ();
 
   // inputs from testbench
   reg [3:0] btn;
-  reg seginv;
 
   // Wire up the inputs and outputs:
   reg clk;
   reg rst_n;
-  reg ena;
-  wire [7:0] ui_in = {3'b000, seginv, btn};
-  wire [7:0] uio_in;
+  wire [7:0] ui_in = {4'b0000, btn};
   wire [7:0] uo_out;
-  wire [7:0] uio_out;
-  wire [7:0] uio_oe;
 `ifdef GL_TEST
   wire VPWR = 1'b1;
   wire VGND = 1'b0;
@@ -35,11 +31,8 @@ module tb ();
 
   wire [3:0] led = uo_out[3:0];
   wire speaker = uo_out[4];
-  wire dig1 = uo_out[5];
-  wire dig2 = uo_out[6];
-  wire [6:0] seg = uio_out[6:0] & uio_oe[6:0];
 
-  tt_um_urish_simon user_project (
+  tt_um_urish_micro_simon user_project (
 
       // Include power ports for the Gate Level test:
 `ifdef GL_TEST
@@ -49,10 +42,6 @@ module tb ();
 
       .ui_in  (ui_in),    // Dedicated inputs
       .uo_out (uo_out),   // Dedicated outputs
-      .uio_in (uio_in),   // IOs: Input path
-      .uio_out(uio_out),  // IOs: Output path
-      .uio_oe (uio_oe),   // IOs: Enable path (active high: 0=input, 1=output)
-      .ena    (ena),      // enable - goes high when design is selected
       .clk    (clk),      // clock
       .rst_n  (rst_n)     // not reset
   );

@@ -1,206 +1,205 @@
-# SPDX-FileCopyrightText: © 2023-2025 Uri Shaked <uri@wokwi.com>
+# SPDX-FileCopyrightText: © 2023-2026 Uri Shaked
 # SPDX-License-Identifier: Apache-2.0
+#
+# Micro tile version: no 7-segment score (no uio pins), so the tests check the
+# LEDs and the speaker only. The tests wait for events (with timeouts) instead
+# of fixed delays, so they work with the micro tile timing.
+
+import os
+from collections import Counter
+from itertools import pairwise
 
 import cocotb
-from cocotb.clock import Clock, Timer
-from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
-import os
+from cocotb.clock import Clock
+from cocotb.triggers import ClockCycles, FallingEdge, Timer
 
+CLOCK_HZ = 3200
+# Speaker half periods, in clock cycles
+COLOR_HALF_PERIODS = [8, 6, 5, 4]  # G3 C4 E4 G4
+DING_HALF_PERIOD = 3  # C5
+BUZZ_HALF_PERIOD = 16  # 100 Hz
 GAME_SEQUENCE_TEST_LENGTH = int(os.getenv("GAME_SEQUENCE_TEST_LENGTH", "5"))
 
 
-def decode_7seg(value: int):
-    """Decode a 7-segment value to a digit"""
-    decode_map = {
-        0x3F: "0",
-        0x06: "1",
-        0x5B: "2",
-        0x4F: "3",
-        0x66: "4",
-        0x6D: "5",
-        0x7D: "6",
-        0x07: "7",
-        0x7F: "8",
-        0x6F: "9",
-        0x00: " ",
-    }
-    if value in decode_map:
-        return decode_map[value]
-    return "?"
+def half_periods(edges):
+    """The set of intervals between speaker edges"""
+    return {b - a for a, b in pairwise(edges)}
+
+
+def notes(edges, min_count=8):
+    """The intervals between speaker edges that occur at least min_count
+    times (a note), leaving out the odd intervals where notes change"""
+    counts = Counter(b - a for a, b in pairwise(edges))
+    return {hp for hp, n in counts.items() if n >= min_count}
 
 
 class SimonDriver:
-    def __init__(self, dut, clock):
+    def __init__(self, dut):
         self._dut = dut
-        self._clock = clock
         self._dut.btn.value = 0
-        self._dut.seginv.value = 0
+        cocotb.start_soon(Clock(dut.clk, round(1e9 / CLOCK_HZ), unit="ns").start())
 
-    async def press_button(self, index):
-        """Press a button for 100 clock cycle, index is zero based"""
+    async def new_game(self, delay_cycles=32):
+        """Reset, then press a button after delay_cycles to start a game (the
+        delay seeds the LFSR)"""
+        self._dut.rst_n.value = 0
+        await ClockCycles(self._dut.clk, 10)
+        self._dut.rst_n.value = 1
+        await ClockCycles(self._dut.clk, delay_cycles)
+        await self.press_button(0)
+
+    async def wait_ms(self, n):
+        """Wait n milliseconds, then for a falling clock edge: the outputs are
+        combinational, so in the gate level simulation they are only read away
+        from the rising edge"""
+        await Timer(n, unit="ms")
+        await FallingEdge(self._dut.clk)
+
+    async def press_button(self, index, hold_ms=40):
+        """Press a button, index is zero based"""
         self._dut.btn.value = 1 << index
-        await ClockCycles(self._clock, 100)
+        await self.wait_ms(hold_ms)
         self._dut.btn.value = 0
-        await ClockCycles(self._clock, 100)
+        await FallingEdge(self._dut.clk)
 
-    async def read_one_led(self):
+    def read_one_led(self):
         """Returns the index of the currently lit LED, or None if no LED is lit"""
         leds = int(self._dut.led.value)
-        if leds == 0b0000:
+        if leds == 0:
             return None
-        elif leds == 0b0001:
-            return 0
-        elif leds == 0b0010:
-            return 1
-        elif leds == 0b0100:
-            return 2
-        elif leds == 0b1000:
-            return 3
+        for i in range(4):
+            if leds == 1 << i:
+                return i
         raise ValueError(f"Unexpected value for leds: {self._dut.led.value}")
 
-    async def wait_for_led(self):
-        """Wait until one of the LEDs is lit"""
-        while await self.read_one_led() is None:
-            await self._dut.led.value_change
+    async def _wait_led_state(self, lit, timeout_ms):
+        cycles = 0
+        while (self.read_one_led() is not None) != lit:
+            await FallingEdge(self._dut.clk)
+            cycles += 1
+            assert cycles < timeout_ms * CLOCK_HZ // 1000, f"timeout waiting for LED {'on' if lit else 'off'}"
 
-    async def wait_for_leds_off(self):
-        """Wait until all LEDs are off"""
-        while await self.read_one_led() is not None:
-            await self._dut.led.value_change
+    async def wait_for_led(self, timeout_ms=2000):
+        await self._wait_led_state(True, timeout_ms)
 
-    async def read_segments(self):
-        """Read the current segment value"""
-        diginv = 0x7F if int(self._dut.seginv.value) else 0
-        if int(self._dut.seginv.value):
-            await RisingEdge(self._dut.dig1)
-        else:
-            await FallingEdge(self._dut.dig1)
-        await Timer(10, unit="ns")
-        dig1 = decode_7seg(int(self._dut.seg.value) ^ diginv)
-        if int(self._dut.seginv.value):
-            await RisingEdge(self._dut.dig2)
-        else:
-            await FallingEdge(self._dut.dig2)
-        await Timer(10, unit="ns")
-        dig2 = decode_7seg(int(self._dut.seg.value) ^ diginv)
-        return f"{dig1}{dig2}"
+    async def wait_for_leds_off(self, timeout_ms=2000):
+        await self._wait_led_state(False, timeout_ms)
+
+    async def speaker_edges(self, duration_ms):
+        """Clock cycle numbers of the speaker edges over the given time"""
+        edges = []
+        last = int(self._dut.speaker.value)
+        for cycle in range(duration_ms * CLOCK_HZ // 1000):
+            await FallingEdge(self._dut.clk)
+            v = int(self._dut.speaker.value)
+            if v != last:
+                edges.append(cycle)
+            last = v
+        return edges
+
+
+async def play_round(simon, sequence):
+    """Watch the game play len(sequence) + 1 colors, then repeat them"""
+    for expected in sequence:
+        await simon.wait_for_led()
+        assert simon.read_one_led() == expected
+        await simon.wait_for_leds_off()
+    await simon.wait_for_led()
+    sequence.append(simon.read_one_led())
+    await simon.wait_for_leds_off()
+    # Wait for the game to be ready for input
+    await simon.wait_ms(120)
+    for expected in sequence:
+        await simon.press_button(expected)
+        assert simon.read_one_led() == expected
+        assert half_periods(await simon.speaker_edges(50)) == {COLOR_HALF_PERIODS[expected]}
+        await simon.wait_for_leds_off(timeout_ms=500)
+        await simon.wait_ms(30)
 
 
 @cocotb.test()
 async def test_simon(dut):
-    dut._log.info("start")
-    clock = Clock(dut.clk, 20, unit="us")  # 50 kHz clock
-    ticks_per_ms = 50  # Clock ticks per millisecond (at 50 kHz)
-    cocotb.start_soon(clock.start())
+    simon = SimonDriver(dut)
+    await simon.new_game()
 
-    simon = SimonDriver(dut, dut.clk)
-
-    # Reset
-    dut._log.info("Reset")
-    dut.ena.value = 1
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 100)
-    dut.rst_n.value = 1
-    await ClockCycles(dut.clk, 1)
-
-    # Should display empty score before game starts
-    assert await simon.read_segments() == "  "
-
-    # Press some button to start the game
-    await simon.press_button(0)
-
-    # Wait 510ms for the game to be started
-    await ClockCycles(dut.clk, 510 * ticks_per_ms)
-
-    assert await simon.read_segments() == "00"
-    initial_led_index = await simon.read_one_led()
-    assert initial_led_index in [0, 1, 2, 3]
+    await simon.wait_for_led(timeout_ms=1000)
+    initial_led_index = simon.read_one_led()
     dut._log.info(f"Initial LED index: {initial_led_index}")
+    await simon.wait_for_leds_off(timeout_ms=500)
+    assert await simon.speaker_edges(20) == []
 
-    # Wait 300ms for the LED to go off
-    await ClockCycles(dut.clk, 300 * ticks_per_ms)
-    assert await simon.read_one_led() is None
+    # Repeat the color with a short press: its LED lights while the button is pressed
+    await simon.wait_ms(120)
+    await simon.press_button(initial_led_index, hold_ms=10)
+    assert simon.read_one_led() == initial_led_index
+    await simon.wait_for_leds_off(timeout_ms=500)
 
-    # Wait another 100ms for the game to be ready for input
-    await ClockCycles(dut.clk, 100 * ticks_per_ms)
+    # Level up: a short ding (before the first color is replayed, 400 ms in)
+    assert notes(await simon.speaker_edges(380)) == {DING_HALF_PERIOD}
 
-    # Press the correct button, check the the LED is lit
-    await simon.press_button(initial_led_index)
-    assert await simon.read_one_led() == initial_led_index
+    # Next level: the first color is replayed
+    await simon.wait_for_led(timeout_ms=1500)
+    assert simon.read_one_led() == initial_led_index
 
-    # Wait for 310ms for the input to be registered
-    await ClockCycles(dut.clk, 310 * ticks_per_ms)
-    assert await simon.read_one_led() is None
 
-    # Check that the score is updated
-    assert await simon.read_segments() == "01"
-
-    # Invert the segment polarity, check the the score is still appearing correctly
-    dut.seginv.value = 1
-    await ClockCycles(dut.clk, 1)
-    assert await simon.read_segments() == "01"
+@cocotb.test()
+async def test_tones(dut):
+    """Each color plays its own tone (restart until all four colors were first)"""
+    simon = SimonDriver(dut)
+    seen = {}
+    for i in range(40):
+        await simon.new_game(delay_cycles=10 + 7 * i)
+        await simon.wait_for_led(timeout_ms=1000)
+        seen[simon.read_one_led()] = half_periods(await simon.speaker_edges(100))
+        if len(seen) == 4:
+            break
+    dut._log.info(f"Half periods per color: {seen}")
+    assert seen == {c: {hp} for c, hp in enumerate(COLOR_HALF_PERIODS)}
 
 
 @cocotb.test()
 async def test_long_game_sequence(dut):
-    dut._log.info("Start")
-    clock = Clock(dut.clk, 20, unit="us")  # 50 kHz clock
-    ticks_per_ms = 50  # Clock ticks per millisecond (at 50 kHz)
-    cocotb.start_soon(clock.start())
-
-    simon = SimonDriver(dut, dut.clk)
-
-    # Reset
-    dut._log.info("Reset")
-    dut.ena.value = 1
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 100)
-    dut.rst_n.value = 1
-    await ClockCycles(dut.clk, 1)
-
-    # Should display empty score before game starts
-    assert await simon.read_segments() == "  "
-
-    # Press some button to start the game
-    await simon.press_button(0)
-
-    # Wait 510ms for the game to be started
-    await ClockCycles(dut.clk, 510 * ticks_per_ms)
-
+    simon = SimonDriver(dut)
+    await simon.new_game()
     sequence = []
-
     for i in range(GAME_SEQUENCE_TEST_LENGTH):
         dut._log.info(f"Testing round {i + 1}")
+        await play_round(simon, sequence)
+    # The next round starts with the same colors
+    await simon.wait_for_led(timeout_ms=1500)
+    assert simon.read_one_led() == sequence[0]
+    dut._log.info(f"Sequence: {sequence}")
 
-        assert await simon.read_segments() == f"{i:02}"
 
-        # Compare the sequence with the LEDs
-        for i in range(len(sequence)):
-            led_index = await simon.read_one_led()
-            assert led_index == sequence[i]
-            await simon.wait_for_leds_off()
-            await simon.wait_for_led()
+@cocotb.test()
+async def test_game_over(dut):
+    simon = SimonDriver(dut)
+    await simon.new_game()
 
-        led_index = await simon.read_one_led()
-        sequence.append(led_index)
+    await simon.wait_for_led(timeout_ms=1000)
+    led_index = simon.read_one_led()
+    await simon.wait_for_leds_off()
+    await simon.wait_ms(120)
 
-        # Wait for the LED to go off
-        await ClockCycles(dut.clk, 310 * ticks_per_ms)
-        assert await simon.read_one_led() is None
+    # A wrong press ends the game at once: its LED does not light
+    wrong = (led_index + 1) % 4
+    await simon.press_button(wrong)
+    assert int(dut.led.value) != 1 << wrong
 
-        for i in range(len(sequence)):
-            # Wait another 100ms for the game to be ready for input
-            await ClockCycles(dut.clk, 100 * ticks_per_ms)
-            await simon.press_button(sequence[i])
-            assert await simon.read_one_led() == sequence[i]
-            # Wait for 310ms for the input to be registered
-            await ClockCycles(dut.clk, 310 * ticks_per_ms)
-            assert await simon.read_one_led() is None
+    # Game over: all four LEDs blink while the speaker plays a low buzz, unlike
+    # any color
+    seen_all_on = False
+    edges = []
+    for i in range(48):
+        seen_all_on |= int(dut.led.value) == 0b1111
+        edges += [i * (25 * CLOCK_HZ // 1000) + e for e in await simon.speaker_edges(25)]
+    assert seen_all_on
+    assert notes(edges) == {BUZZ_HALF_PERIOD}
 
-        # Wait for the next round (until one LED is lit)
-        await simon.wait_for_led()
+    # After the game over tone, any button starts a new game
+    assert await simon.speaker_edges(50) == []
+    await simon.press_button(0)
+    await simon.wait_for_led(timeout_ms=1000)
 
 
 # Skipped by default, as it takes a long time to run. To run it, use:
@@ -208,44 +207,18 @@ async def test_long_game_sequence(dut):
 #     make COCOTB_TEST_FILTER=test_pseudo_randomness
 @cocotb.test(skip=True)
 async def test_pseudo_randomness(dut):
-    dut._log.info("start")
-    clock = Clock(dut.clk, 20, unit="us")  # 50 kHz clock
-    ticks_per_ms = 50  # Clock ticks per millisecond (at 50 kHz)
-    cocotb.start_soon(clock.start())
-
-    simon = SimonDriver(dut, dut.clk)
-
-    # Reset
-    dut.ena.value = 1
-    dut.uio_in.value = 0
+    simon = SimonDriver(dut)
 
     led_bins = [0, 0, 0, 0]
 
     def normalize_bins(bins):
         return [count / sum(bins) for count in bins]
 
-    def format_bins(bins):
-        return "[" + ", ".join([f"{count:.2f}" for count in normalize_bins(bins)]) + "]"
+    for i in range(400):
+        # Vary the time of the first press by one clock cycle each iteration
+        await simon.new_game(delay_cycles=10 + i)
+        await simon.wait_for_led(timeout_ms=1000)
+        led_bins[simon.read_one_led()] += 1
 
-    for i in range(500):
-        dut.rst_n.value = 0
-        await ClockCycles(dut.clk, 100)
-        dut.rst_n.value = 1
-        await ClockCycles(dut.clk, 1)
-
-        await ClockCycles(dut.clk, i * ticks_per_ms)
-
-        # Press some button to start the game
-        await simon.press_button(0)
-
-        # Wait 510ms for the game to be started
-        await ClockCycles(dut.clk, 510 * ticks_per_ms)
-        led_index = await simon.read_one_led()
-        assert led_index in [0, 1, 2, 3]
-        led_bins[led_index] += 1
-        dut._log.info(
-            f"Iteration: {i}, LED index: {led_index}, bins: {format_bins(led_bins)}"
-        )
-
-    dut._log.info(f"LED bins: {format_bins(led_bins)} (raw: {led_bins})")
+    dut._log.info(f"LED bins: {normalize_bins(led_bins)} (raw: {led_bins})")
     assert all(0.2 <= count <= 0.3 for count in normalize_bins(led_bins))

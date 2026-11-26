@@ -1,28 +1,35 @@
+/*
+ * Copyright (c) 2024-2026 Uri Shaked
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+`default_nettype none
+
+// Square wave with a half period of half_period + 1 clock cycles, while enabled
 module sound_gen (
     input wire clk,
     input wire rst,
-    input wire [5:0] ticks_per_milli,
-    input wire [9:0] freq,
-    output reg sound
+    input wire enable,
+    input wire [2:0] half_period,  // in clock cycles, minus one
+    output wire sound
 );
-  reg  [15:0] tick_counter;
-  wire [15:0] ticks_per_second = ticks_per_milli * 1000;
-  wire [15:0] freq32 = {6'b0, freq};
+
+  reg [2:0] counter;
+  reg wave;
 
   always @(posedge clk) begin
-    if (rst) begin
-      tick_counter <= 0;
-      sound <= 0;
-    end else if (freq == 0) begin
-      sound <= 0;
+    if (rst || !enable) begin
+      counter <= 0;
+      wave <= 0;
+    end else if (counter == 0) begin
+      counter <= half_period;
+      wave <= !wave;
     end else begin
-      tick_counter <= tick_counter + freq32;
-      if (tick_counter >= (ticks_per_second >> 1)) begin
-        sound <= !sound;
-        tick_counter <= tick_counter + freq32 - (ticks_per_second >> 1);
-      end
+      counter <= counter - 1;
     end
   end
 
-endmodule
+  // wave clears one cycle after enable falls: mute that cycle too
+  assign sound = wave && enable;
 
+endmodule
