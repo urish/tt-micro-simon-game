@@ -12,7 +12,7 @@
  *   sequence (255 different games). The color is two LFSR bits 4 apart, so
  *   consecutive colors share no bit.
  * - the original's G-C-E-G chord from a 3-bit half-period counter
- * - a short "ding" between levels; a buzz at game over
+ * - a four-note tune between levels; a four-note tune, then a buzz, at game over
  * - no tone register: the tone and the LEDs are decoded from the state, the
  *   timer and the expected color. A wrong press goes straight to game over.
  * - the sequence length is capped at MAX_GAME_LEN
@@ -28,7 +28,7 @@ module simon (
     output wire sound
 );
 
-  localparam MAX_GAME_LEN = 15;
+  localparam MAX_GAME_LEN = 63;
   localparam GAME_LEN_BITS = $clog2(MAX_GAME_LEN + 1);
 
   localparam StatePowerOn = 3'd0;  // also after the game over tone
@@ -37,7 +37,7 @@ module simon (
   localparam StatePlayWait = 3'd3;  // show one color
   localparam StateUserWait = 3'd4;
   localparam StateUserInput = 3'd5;  // a correct press: play its color
-  localparam StateNextLevel = 3'd6;  // ding, and step the LFSR back
+  localparam StateNextLevel = 3'd6;  // level up tune, and step the LFSR back
   localparam StateGameOver = 3'd7;
 
   // Keep the 3-bit state encoding: one-hot recoding costs five more flip-flops
@@ -53,7 +53,6 @@ module simon (
 
   // Durations: unit_timer counts up from 0 one by one, so testing the set
   // bits is enough to catch the first time unit_timer reaches the value
-  wire t160 = unit_timer[3];  // 8 units
   wire t320 = unit_timer[4];  // 16 units
   wire t400 = unit_timer[4] & unit_timer[2];  // 20 units
   wire t480 = unit_timer[4] & unit_timer[3];  // 24 units
@@ -82,20 +81,38 @@ module simon (
   wire color_on = (state == StatePlayWait || state == StateUserInput) && !t320;
 
   // Half periods in clock cycles at 3.2 kHz: 8/6/5/4/3 = 200/267/320/400/533 Hz
-  // (~G3, C4, E4, G4, C5). Colors: G3 C4 E4 G4; level up ding: C5. Game over
-  // buzz: 100 Hz from the prescaler.
-  wire ding_on = state == StateNextLevel && t160 && !t320;
-  wire note_on = color_on || ding_on;
+  // (~G3, C4, E4, G4, C5). Colors: G3 C4 E4 G4; level up tune (80 ms notes):
+  // C4 E4 G4 C5; game over tune (80 ms notes): G4 E4 C4 G3. Game over buzz:
+  // 100 Hz from the prescaler.
   reg [2:0] half_period;  // minus one
+  reg note_on;
   always @(*) begin
-    if (!color_on) half_period = 3'd2;  // ding
-    else
+    note_on = 1'b1;
+    half_period = 3'd2;
+    if (color_on)
       case (color)
         2'd0: half_period = 3'd7;
         2'd1: half_period = 3'd5;
         2'd2: half_period = 3'd4;
         default: half_period = 3'd3;
       endcase
+    else if (state == StateNextLevel)
+      case (unit_timer[4:2])
+        3'd1: half_period = 3'd5;
+        3'd2: half_period = 3'd4;
+        3'd3: half_period = 3'd3;
+        3'd4: half_period = 3'd2;
+        default: note_on = 1'b0;
+      endcase
+    else if (state == StateGameOver)
+      case (unit_timer[4:2])
+        3'd0: half_period = 3'd3;
+        3'd1: half_period = 3'd4;
+        3'd2: half_period = 3'd5;
+        3'd3: half_period = 3'd7;
+        default: note_on = 1'b0;
+      endcase
+    else note_on = 1'b0;
   end
 
   wire note;
@@ -107,7 +124,7 @@ module simon (
       .sound(note)
   );
 
-  wire buzz_on = state == StateGameOver;
+  wire buzz_on = state == StateGameOver && !note_on;
   assign sound = buzz_on ? prescaler[4] : note;
 
   always @(*) begin
@@ -196,14 +213,14 @@ module simon (
           end
         end
         StateNextLevel: begin
-          // short "ding" (decoded from unit_timer), then replay the sequence
-          if (t400) begin
+          // level up tune (decoded from unit_timer), then replay the sequence
+          if (t480) begin
             unit_timer <= 0;
             state <= StatePlayWait;
           end
         end
         StateGameOver: begin
-          // game over buzz, then the power-on LED chase until a button is pressed
+          // game over tune and buzz, then the power-on LED chase until a button is pressed
           if (t480) begin
             state <= StatePowerOn;
           end

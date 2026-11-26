@@ -28,8 +28,8 @@ tb.speaker
 -Game state
 @22
 tb.user_project.simon1.state[2:0]
-tb.user_project.simon1.seq_counter[3:0]
-tb.user_project.simon1.level[3:0]
+tb.user_project.simon1.seq_counter[5:0]
+tb.user_project.simon1.level[5:0]
 tb.user_project.simon1.unit_timer[4:0]
 @28
 tb.user_project.simon1.color[1:0]

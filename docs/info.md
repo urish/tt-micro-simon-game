@@ -8,11 +8,11 @@ The sequence is displayed by lighting up the LEDs. Each color also has a corresp
 
 In each turn, the game will play the sequence, and then wait for the user to repeat the sequence
 by pressing the buttons according to the color sequence.
-If the user repeated the sequence correctly, the game plays a short "ding" (C5),
-adds a new color at the end of the sequence, and moves to the next turn. The sequence grows up to 15 colors;
-after that, each turn replays the same 15 colors.
+If the user repeated the sequence correctly, the game plays a short rising tune (C4 E4 G4 C5),
+adds a new color at the end of the sequence, and moves to the next turn. The sequence grows up to 63 colors;
+after that, each turn replays the same 63 colors.
 
-A wrong press ends the game at once: the LEDs blink while the game plays a low buzz. Pressing several buttons at once counts as a wrong press. After the buzz, the LEDs show the power-on chase
+A wrong press ends the game at once: the LEDs blink while the game plays a falling tune (G4 E4 C4 G3) and a low buzz. Pressing several buttons at once counts as a wrong press. After the buzz, the LEDs show the power-on chase
 again, and the next button press starts a new game.
 
 The time of the first button press picks one of 255 different games.

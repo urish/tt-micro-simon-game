@@ -16,7 +16,7 @@ from cocotb.triggers import ClockCycles, FallingEdge, Timer
 CLOCK_HZ = 3200
 # Speaker half periods, in clock cycles
 COLOR_HALF_PERIODS = [8, 6, 5, 4]  # G3 C4 E4 G4
-DING_HALF_PERIOD = 3  # C5
+LEVEL_UP_HALF_PERIODS = {6, 5, 4, 3}  # C4 E4 G4 C5
 BUZZ_HALF_PERIOD = 16  # 100 Hz
 GAME_SEQUENCE_TEST_LENGTH = int(os.getenv("GAME_SEQUENCE_TEST_LENGTH", "5"))
 
@@ -134,8 +134,8 @@ async def test_simon(dut):
     assert simon.read_one_led() == initial_led_index
     await simon.wait_for_leds_off(timeout_ms=500)
 
-    # Level up: a short ding (before the first color is replayed, 400 ms in)
-    assert notes(await simon.speaker_edges(380)) == {DING_HALF_PERIOD}
+    # Level up: a rising tune
+    assert notes(await simon.speaker_edges(450)) == LEVEL_UP_HALF_PERIODS
 
     # Next level: the first color is replayed
     await simon.wait_for_led(timeout_ms=1500)
@@ -186,15 +186,15 @@ async def test_game_over(dut):
     await simon.press_button(wrong)
     assert int(dut.led.value) != 1 << wrong
 
-    # Game over: all four LEDs blink while the speaker plays a low buzz, unlike
-    # any color
+    # Game over: all four LEDs blink while the speaker plays a falling tune
+    # (the four colors' tones), then the buzz
     seen_all_on = False
     edges = []
     for i in range(48):
         seen_all_on |= int(dut.led.value) == 0b1111
         edges += [i * (25 * CLOCK_HZ // 1000) + e for e in await simon.speaker_edges(25)]
     assert seen_all_on
-    assert notes(edges) == {BUZZ_HALF_PERIOD}
+    assert notes(edges) == set(COLOR_HALF_PERIODS) | {BUZZ_HALF_PERIOD}
 
     # After the game over tone, any button starts a new game
     assert await simon.speaker_edges(50) == []

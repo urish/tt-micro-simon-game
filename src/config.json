@@ -30,6 +30,13 @@
   "CTS_ROOT_BUFFER": "sky130_fd_sc_hd__clkbuf_4",
   "CTS_CLK_BUFFERS": ["sky130_fd_sc_hd__clkbuf_2", "sky130_fd_sc_hd__clkbuf_4"],
 
+  "//": "No delay cells: repair and hold buffers become buf/clkbuf cells (3.75 to 5 um2 instead of 10)",
+  "EXTRA_EXCLUDED_CELLS": [
+    "sky130_fd_sc_hd__clkdlybuf4s*",
+    "sky130_fd_sc_hd__dlygate4sd*",
+    "sky130_fd_sc_hd__dlymetal6s*"
+  ],
+
   "//": "RUN_LINTER, LINTER_INCLUDE_PDK_MODELS - Disabling the linter is not recommended!",
   "RUN_LINTER": 1,
   "LINTER_INCLUDE_PDK_MODELS": 1,
